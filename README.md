@@ -1,14 +1,14 @@
-# 📶 LTE EPC Python Implementation
+#  LTE EPC Python Implementation
 
 This repository contains a high-fidelity Python implementation of the **Long-Term Evolution (LTE) Evolved Packet Core (EPC)** network components. Originally translated from a C++ codebase, this project serves as a robust simulation environment for protocol development and network testing.
 
-## 📝 Overview
+##  Overview
 
 The **LTE EPC Python Implementation** provides a virtualized sandbox for exploring LTE protocols without the need for expensive proprietary hardware. It includes full support for handover scenarios, integrated security modules, and real-time traffic monitoring.
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 The system is divided into core functional entities and supporting infrastructure to mirror a real-world 3GPP deployment.
 
@@ -58,7 +58,7 @@ The system is divided into core functional entities and supporting infrastructur
 
 ---
 
-## 🛠️ System Requirements & Setup
+##  System Requirements & Setup
 
 ### Prerequisites
 * **OS:** Linux/Unix environment (Required for **TUN/TAP** interfaces).
@@ -94,7 +94,7 @@ CREATE TABLE loc_info (
 
 ---
 
-## 🚀 Usage
+##  Usage
 
 ### 1. Starting the EPC
 Components should be started in the following order:
@@ -128,7 +128,7 @@ g_hss_port = 6000
 
 ---
 
-## 🔬 Protocol Implementation Details
+##  Protocol Implementation Details
 
 ### Message Types & Headers
 
@@ -156,7 +156,7 @@ The implementation supports **intra-MME handover** following this sequence:
 
 ---
 
-## ⚡ Performance & Troubleshooting
+##  Performance & Troubleshooting
 
 ### Considerations
 * **Memory:** UE Context (~200 bytes), Packet Buffers (1KB), Thread Overhead (~8MB).
@@ -177,13 +177,13 @@ python3 mme.py 4
 
 ---
 
-## 🧪 Testing
+##  Testing
 * **Unit Tests:** `python3 -m pytest tests/`
 * **Integration:** `python3 tests/test_attach.py`
 * **Benchmarks:** `python3 tests/benchmark_throughput.py`
 
 ---
 
-## 📄 License & References
+##  License & References
 * **License:** MIT License.
 * **Standards:** 3GPP TS 24.301 (NAS), TS 36.413 (S1AP), TS 29.274 (GTPv2), TS 29.212 (Diameter).
