@@ -42,7 +42,7 @@ class UdpServer:
                 if self.running:
                     print(f"UDP server error: {e}")
     
-    def snd(self, src_sock_addr: socket.SockAddrIn, pkt: any):
+    def snd(self, src_sock_addr, pkt: any):
         """Send packet to source address"""
         try:
             self.sock.sendto(pkt.data[pkt.data_ptr:pkt.len], src_sock_addr)
