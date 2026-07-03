@@ -1,6 +1,15 @@
 """
-Packet Gateway (PGW) implementation
+vPGW - Packet Gateway implementation
 
+Part of the Affirmed Lab SCHA M2M vEPC MCC block (vSAEGW-1 vSGW + 2 vPGWs).
+This module can be started as either of the two vPGWs shown in the diagram:
+
+  - M2M vPGW1        (role="m2m", default APN)  -- Gx to vPCRF, SGi to BV FW
+  - IoT/pLTE vPGW2   (role="iot", IoT APN)       -- Gx to vPCRF, SGi to BV FW
+
+Role is selected with the 3rd CLI arg (see check_usage/init below) and just
+picks which S5/SGi ports the instance listens on and which PCC identity it
+presents to the vPCRF over Gx; the session-handling logic is identical.
 """
 
 import threading
@@ -15,17 +24,27 @@ from sync import g_sync
 from udp_client import UdpClient
 from udp_server import UdpServer
 from utils import g_utils
+from pcrf_client import PcrfClient
 
 # Global configuration
 g_sgw_s5_ip_addr = "10.129.26.169"
 g_pgw_s5_ip_addr = "10.129.26.169"
-g_pgw_sgi_ip_addr = "10.129.26.169"
+g_pgw_sgi_ip_addr = "10.129.26.169"    # SGi towards BV FW
 g_sink_ip_addr = "10.129.26.169"
+
+# vPCRF (Gx) - policy/charging control for both vPGW1 and vPGW2
+g_pcrf_ip_addr = "10.129.26.169"
+g_pcrf_gx_port = 9000
+
 g_sgw_s5_port = 7200
 g_pgw_s5_port = 8000
 g_pgw_sgi_port = 8100
 g_sink_port = 8500
 MAX_UE_COUNT = 1000
+
+# Which vPGW this process represents in the diagram: "m2m" (vPGW1, default)
+# or "iot" (IoT/pLTE vPGW2). Set via the 3rd command line argument.
+g_pgw_role = "m2m"
 
 # Server thread counts
 g_s5_server_threads_count = 0
@@ -74,6 +93,9 @@ class Pgw:
         self.s5_server = UdpServer()
         self.sgi_server = UdpServer()
         
+        # Gx interface to vPCRF, used to fetch PCC rules for each session
+        self.pcrf_client = PcrfClient(g_pgw_role)
+        
         # Initialize IP addresses
         self.set_ip_addrs()
     
@@ -83,6 +105,10 @@ class Pgw:
         self.sgi_id.clear()
         self.ue_ctx.clear()
         self.ip_addrs.clear()
+    
+    def set_role(self, role: str):
+        """Set which vPGW (m2m/iot) this instance represents, post CLI parse"""
+        self.pcrf_client.role = role
     
     def handle_create_session(self, src_sock_addr: Dict, pkt: Packet):
         """Handle create session request"""
@@ -96,6 +122,12 @@ class Pgw:
         s5_cteid_ul = s5_cteid_dl
         s5_uteid_ul = s5_cteid_dl
         ue_ip_addr = self.ip_addrs.get(imsi, "")
+        
+        # Gx: ask vPCRF for the PCC rules (QoS/charging) to apply to this
+        # session before it is admitted, as shown by the Gx link from each
+        # vPGW to vPCRF in the diagram.
+        pcc_rule = self.pcrf_client.request_pcc_rules(imsi, apn_in_use, g_pcrf_ip_addr, g_pcrf_gx_port)
+        print(f"pgw_handlecreatesession: Gx pcc rule for {imsi}: {pcc_rule}")
         
         self.update_itfid(5, s5_uteid_ul, "", imsi)
         self.update_itfid(0, 0, ue_ip_addr, imsi)
@@ -270,16 +302,28 @@ g_pgw = Pgw()
 def check_usage(argc: int):
     """Check command line usage"""
     if argc < 3:
-        print("Usage: ./<pgw_server_exec> S5_SERVER_THREADS_COUNT SGI_SERVER_THREADS_COUNT")
+        print("Usage: ./<pgw_server_exec> S5_SERVER_THREADS_COUNT SGI_SERVER_THREADS_COUNT [m2m|iot]")
         g_utils.handle_type1_error(-1, "Invalid usage error: pgwserver_checkusage")
 
 def init(argv):
     """Initialize PGW server"""
     global g_s5_server_threads_count, g_sgi_server_threads_count
     global g_s5_server_threads, g_sgi_server_threads
+    global g_pgw_role, g_pgw_s5_port, g_pgw_sgi_port
     
     g_s5_server_threads_count = int(argv[1])
     g_sgi_server_threads_count = int(argv[2])
+    
+    # Optional 3rd arg selects which vPGW from the diagram this process is:
+    # "m2m" -> M2M vPGW1 (default), "iot" -> IoT/pLTE vPGW2
+    if len(argv) > 3 and argv[3].lower() == "iot":
+        g_pgw_role = "iot"
+        g_pgw_s5_port = 8010
+        g_pgw_sgi_port = 8110
+    else:
+        g_pgw_role = "m2m"
+    
+    g_pgw.set_role(g_pgw_role)
     
     g_s5_server_threads = [threading.Thread() for _ in range(g_s5_server_threads_count)]
     g_sgi_server_threads = [threading.Thread() for _ in range(g_sgi_server_threads_count)]
@@ -290,15 +334,17 @@ def run():
     """Run PGW server"""
     global g_s5_server_threads, g_sgi_server_threads
     
-    # PGW S5 server
-    print("PGW S5 server started")
+    label = "M2M vPGW1" if g_pgw_role == "m2m" else "IoT/pLTE vPGW2"
+    
+    # PGW S5 server (towards M2M vSGW1 via the MCC)
+    print(f"{label} S5 server started")
     g_pgw.s5_server.run(g_pgw_s5_ip_addr, g_pgw_s5_port)
     for i in range(g_s5_server_threads_count):
         g_s5_server_threads[i] = threading.Thread(target=handle_s5_traffic)
         g_s5_server_threads[i].start()
     
-    # PGW SGI server
-    print("PGW SGI server started")
+    # PGW SGi server (towards BV FW)
+    print(f"{label} SGi server started (-> BV FW)")
     g_pgw.sgi_server.run(g_pgw_sgi_ip_addr, g_pgw_sgi_port)
     for i in range(g_sgi_server_threads_count):
         g_sgi_server_threads[i] = threading.Thread(target=handle_sgi_traffic)

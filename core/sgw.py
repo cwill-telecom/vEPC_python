@@ -1,6 +1,9 @@
 """
-Serving Gateway (SGW) implementation
+M2M vSGW1 - Serving Gateway implementation
 
+Part of the Affirmed Lab SCHA M2M vEPC MCC block (vSAEGW-1 vSGW +
+2 vPGWs). Terminates S11 from M2M vMME and S5 towards whichever vPGW
+(M2M vPGW1 or IoT/pLTE vPGW2) the MME selected for the session.
 """
 
 import threading
@@ -495,21 +498,21 @@ def run():
     global g_s11_server_threads, g_s1_server_threads, g_s5_server_threads
     
     # SGW S11 server
-    print("SGW S11 server started")
+    print("M2M vSGW1 S11 server started")
     g_sgw.s11_server.run(g_sgw_s11_ip_addr, g_sgw_s11_port)
     for i in range(g_s11_server_threads_count):
         g_s11_server_threads[i] = threading.Thread(target=handle_s11_traffic)
         g_s11_server_threads[i].start()
     
     # SGW S1 server
-    print("SGW S1 server started")
+    print("M2M vSGW1 S1 server started")
     g_sgw.s1_server.run(g_sgw_s1_ip_addr, g_sgw_s1_port)
     for i in range(g_s1_server_threads_count):
         g_s1_server_threads[i] = threading.Thread(target=handle_s1_traffic)
         g_s1_server_threads[i].start()
     
     # SGW S5 server
-    print("SGW S5 server started")
+    print("M2M vSGW1 S5 server started (-> MCC vPGWs)")
     g_sgw.s5_server.run(g_sgw_s5_ip_addr, g_sgw_s5_port)
     for i in range(g_s5_server_threads_count):
         g_s5_server_threads[i] = threading.Thread(target=handle_s5_traffic)

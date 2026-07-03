@@ -1,6 +1,9 @@
 """
-Mobility Management Entity (MME) implementation
+M2M vMME - Mobility Management Entity implementation
 
+Part of the Affirmed Lab SCHA M2M vEPC. Terminates S1-MME from the EnB
+(PLMN 311228), talks S11 to M2M vSGW1, and anchors each UE on one of two
+vPGWs (M2M vPGW1 / IoT-pLTE vPGW2) based on APN.
 """
 
 import threading
@@ -20,13 +23,31 @@ from udp_client import UdpClient
 from utils import g_utils
 
 # Global configuration
+#
+# Topology (see "Affirmed Lab SCHA M2M vEPC" diagram):
+#   EnB --S1-MME--> [311228] --S1-MME--> M2M vMME --S11--> M2M vSGW1
+#   M2M vSGW1 --S5--> MCC (vSAEGW-1 vSGW + 2 vPGWs) --> { M2M vPGW1, IoT/pLTE vPGW2 }
+#   M2M vPGW1 / IoT-pLTE vPGW2 --Gx--> vPCRF, --SGi--> BV FW
 g_trafmon_ip_addr = "10.129.26.169"
 g_mme_ip_addr = "10.129.26.169"
 g_hss_ip_addr = "10.129.26.169"
-g_sgw_s11_ip_addr = "10.129.26.169"
-g_sgw_s1_ip_addr = "10.129.26.169"
-g_sgw_s5_ip_addr = "10.129.26.169"
-g_pgw_s5_ip_addr = "10.129.26.169"
+g_sgw_s11_ip_addr = "10.129.26.169"   # M2M vSGW1 (S11)
+g_sgw_s1_ip_addr = "10.129.26.169"    # M2M vSGW1 (S1)
+g_sgw_s5_ip_addr = "10.129.26.169"    # M2M vSGW1 (S5, towards MCC)
+
+# The MCC hosts one vSAEGW (vSGW) fronting two vPGWs. MME selects which
+# vPGW the session is anchored on based on the subscriber's APN, mirroring
+# the M2M vPGW1 / IoT-pLTE vPGW2 split in the diagram. The SGW itself is
+# PGW-agnostic: MME just tells it which PGW S5 address/port to use per UE.
+g_pgw1_s5_ip_addr = "10.129.26.169"   # M2M vPGW1 (default APN)
+g_pgw1_s5_port = 8000
+g_pgw2_s5_ip_addr = "10.129.26.169"   # IoT/pLTE vPGW2 (IoT APN)
+g_pgw2_s5_port = 8010
+
+# Legacy single-PGW aliases (kept for backward compatibility with callers
+# that still reference the old single-PGW globals).
+g_pgw_s5_ip_addr = g_pgw1_s5_ip_addr
+g_pgw_s5_port = g_pgw1_s5_port
 
 g_trafmon_port = 4000
 g_mme_port = 5000
@@ -34,7 +55,15 @@ g_hss_port = 6000
 g_sgw_s11_port = 7000
 g_sgw_s1_port = 7100
 g_sgw_s5_port = 7200
-g_pgw_s5_port = 8000
+
+# APN identifiers used to pick a vPGW (returned by HSS as default_apn / used
+# as apn_in_use on the UE context). 1 = M2M (vPGW1), 2 = IoT/pLTE (vPGW2).
+APN_M2M = 1
+APN_IOT_PLTE = 2
+
+# PLMN broadcast by the EnB in the diagram (MCC=311, MNC=228 -> "311228").
+g_plmn_mcc = 311
+g_plmn_mnc = 228
 
 g_timer = 100
 
@@ -97,8 +126,8 @@ class MmeIds:
     """MME identification information"""
     
     def __init__(self):
-        self.mcc = 1
-        self.mnc = 1
+        self.mcc = g_plmn_mcc
+        self.mnc = g_plmn_mnc
         self.plmn_id = g_telecom.get_plmn_id(self.mcc, self.mnc)
         self.mmegi = 1
         self.mmec = 1
@@ -414,11 +443,25 @@ class Mme:
         print(f"mme_createsession: attach accept sent to ue: {pkt.len}: {guti}")
     
     def set_pgw_info(self, guti: int):
-        """Set PGW information for UE"""
+        """Select the vPGW anchor for this UE based on its APN.
+
+        Mirrors the MCC block in the diagram, which fronts two vPGWs:
+        M2M vPGW1 (default APN) and IoT/pLTE vPGW2 (IoT APN).
+        """
         g_sync.mlock(self.uectx_mux)
-        self.ue_ctx[guti].pgw_s5_port = g_pgw_s5_port
-        self.ue_ctx[guti].pgw_s5_ip_addr = g_pgw_s5_ip_addr
+        apn_in_use = self.ue_ctx[guti].apn_in_use
+        if apn_in_use == APN_IOT_PLTE:
+            pgw_s5_ip_addr = g_pgw2_s5_ip_addr
+            pgw_s5_port = g_pgw2_s5_port
+        else:
+            pgw_s5_ip_addr = g_pgw1_s5_ip_addr
+            pgw_s5_port = g_pgw1_s5_port
+        
+        self.ue_ctx[guti].pgw_s5_ip_addr = pgw_s5_ip_addr
+        self.ue_ctx[guti].pgw_s5_port = pgw_s5_port
         g_sync.munlock(self.uectx_mux)
+        print(f"mme_setpgwinfo: anchored guti {guti} on vPGW "
+              f"{pgw_s5_ip_addr}:{pgw_s5_port} (apn={apn_in_use})")
     
     def get_guti(self, pkt: Packet) -> int:
         """Get GUTI from packet"""
@@ -606,7 +649,7 @@ def run():
     """Run MME server"""
     global hss_clients, sgw_s11_clients
     
-    print("MME server started")
+    print(f"M2M vMME server started (PLMN {g_mme.mme_ids.mcc}{g_mme.mme_ids.mnc:03d})")
     
     for i in range(g_workers_count):
         hss_clients[i].conn(g_hss_ip_addr, g_hss_port)
