@@ -1,25 +1,33 @@
-#  LTE EPC Python Implementation
+#  LTE vEPC Python Implementation
 
-This repository contains a high-fidelity Python implementation of the **Long-Term Evolution (LTE) Evolved Packet Core (EPC)** network components. Originally translated from a C++ codebase, this project serves as a robust simulation environment for protocol development and network testing.
+This repository contains a Python implementation of the **Long-Term Evolution (LTE) Virtual Evolved Packet Core (EPC)** network components.
 
 ##  Overview
 
-The **LTE EPC Python Implementation** provides a virtualized sandbox for exploring LTE protocols without the need for expensive proprietary hardware. It includes full support for handover scenarios, integrated security modules, and real-time traffic monitoring.
+The **LTE vEPC Python Implementation** provides a virtualized sandbox for exploring LTE protocols without the need for expensive proprietary hardware. It includes full support for handover scenarios, integrated security modules, and real-time traffic monitoring.
 
 ---
 
 ##  Architecture
 
-The system is divided into core functional entities and supporting infrastructure to mirror a real-world 3GPP deployment.
+The system is divided into core functional entities and supporting infrastructure to mirror a real-world 3GPP deployment. 
 
-[Image of LTE EPC network architecture diagram]
+```
+EnB --S1-MME--> [PLMN 311228] --S1-MME--> M2M vMME --S11--> M2M vSGW1
+                                                                 |  S5 (into MCC)
+                                                                 v
+                                        MCC (vSAEGW-1 vSGW + 2 vPGWs)
+                                        ├── M2M vPGW1        --Gx--> vPCRF --SGi--> BV FW
+                                        └── IoT/pLTE vPGW2   --Gx--> vPCRF --SGi--> BV FW
+```
 
 ### Core Network Components
 * **HSS (Home Subscriber Server):** Central database for subscriber data and authentication.
-* **MME (Mobility Management Entity):** Handles mobility management and session establishment.
-* **SGW (Serving Gateway):** Routes user data packets between eNodeB and PGW.
-* **PGW (Packet Gateway):** Provides connectivity to external IP networks.
-* **RAN (Radio Access Network):** Simulates LTE base station functionality.
+* **MME (M2M vMME):** Handles mobility management and session establishment; selects the vPGW anchor per UE based on APN.
+* **SGW (M2M vSGW1):** Routes user data packets between eNodeB and whichever vPGW the MME selected.
+* **PGW (M2M vPGW1 / IoT-pLTE vPGW2):** Two PGW instances of the same module, distinguished by role/APN; each provides connectivity to external IP networks (SGi towards the BV FW firewall) and pulls PCC rules from vPCRF over Gx.
+* **PCRF (vPCRF):** Serves the Gx interface for both vPGWs, returning the PCC (QoS/charging) rule to apply per session.
+* **RAN (Radio Access Network):** Simulates LTE base station (EnB) functionality.
 
 ### File Structure
 ```text
@@ -28,9 +36,11 @@ The system is divided into core functional entities and supporting infrastructur
 ├── database_setup.sql           # MySQL schema
 ├── core/
 │   ├── hss.py                   # Home Subscriber Server
-│   ├── mme.py                   # Mobility Management Entity
-│   ├── sgw.py                   # Serving Gateway
-│   ├── pgw.py                   # Packet Gateway
+│   ├── mme.py                   # M2M vMME - Mobility Management Entity
+│   ├── sgw.py                   # M2M vSGW1 - Serving Gateway
+│   ├── pgw.py                   # M2M vPGW1 / IoT-pLTE vPGW2 (role-selectable Packet Gateway)
+│   ├── pcrf.py                  # vPCRF - Policy and Charging Rules Function (Gx server)
+│   ├── pcrf_client.py           # Gx client used by pgw.py to reach vPCRF
 │   ├── ran.py                   # Radio Access Network
 │   └── sink.py                  # Traffic Sink
 ├── protocols/
@@ -102,10 +112,14 @@ Components should be started in the following order:
 | Component | Command | Description |
 | :--- | :--- | :--- |
 | **HSS** | `python3 hss.py 4` | Start with 4 worker threads |
-| **MME** | `python3 mme.py 8` | Start with 8 worker threads |
-| **SGW** | `python3 sgw.py 4 4 4` | S11, S1, S5 thread counts |
-| **PGW** | `python3 pgw.py 4 4` | S5, SGI thread counts |
+| **vPCRF** | `python3 pcrf.py 4` | Gx server for both vPGWs, 4 worker threads |
+| **MME** | `python3 mme.py 8` | Start with 8 worker threads (M2M vMME, PLMN 311228) |
+| **SGW** | `python3 sgw.py 4 4 4` | S11, S1, S5 thread counts (M2M vSGW1) |
+| **PGW (M2M vPGW1)** | `python3 pgw.py 4 4 m2m` | S5, SGi thread counts; role defaults to `m2m` |
+| **PGW (IoT/pLTE vPGW2)** | `python3 pgw.py 4 4 iot` | S5, SGi thread counts; second instance on IoT ports |
 | **Sink** | `python3 sink.py 2` | Terminate traffic for testing |
+
+Start `pcrf.py` before `pgw.py`, and start both `pgw.py` instances (M2M and IoT roles) before `mme.py`, since the MME picks a vPGW per-UE based on APN (`APN_M2M` -> vPGW1, `APN_IOT_PLTE` -> vPGW2).
 
 ### 2. Running Simulations
 * **Basic UE Registration:**
@@ -134,7 +148,7 @@ g_hss_port = 6000
 
 | Protocol | Header Size | Key Message Types |
 | :--- | :--- | :--- |
-| **Diameter** | 3 Bytes | 1: Auth Info Request, 2: Location Update |
+| **Diameter** | 3 Bytes | 1: Auth Info Request (S6a), 2: Location Update (S6a), 3: Gx CCR, 4: Gx CCA |
 | **GTP** | 13 Bytes | 1: Create Session, 2: Modify Bearer, 4: Indirect Tunnel |
 | **S1AP** | 11 Bytes | 1: Initial Attach, 3: Security Mode, 7-10: Handover |
 
